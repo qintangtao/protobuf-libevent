@@ -107,6 +107,9 @@ void RpcChannelImpl::CallMethod(const google::protobuf::MethodDescriptor* method
 	}
 	else
 	{
+		if (controller)
+			controller->SetFailed("RPC_ERR_NO_NETWORK");
+
 		if (done)
 			done->Run();
 	}
@@ -338,7 +341,7 @@ void RpcChannelImpl::decode(const std::string &message_str)
 		{
 			if (!response->ParseFromString(message.response())) {
 				if (controller)
-					controller->SetFailed("Parse response failed");
+					controller->SetFailed("RPC_ERR_PARSE");
 			}
 		}
 			break;

@@ -2,15 +2,8 @@
 #include "RpcServer.h"
 #include "EchoServiceImpl.h"
 
-#define CONN_TIMEOUT_READ 30
-#define CONN_TIMEOUT_WRITE 0
-
 static int use_thread_pool = 0; 
 static struct timeval tv_read = { 30, 0 };
-
-
-
-
 
 RpcServer::RpcServer(unsigned short port)
 	: m_base(NULL)
@@ -132,7 +125,7 @@ void RpcServer::read_cb(struct bufferevent *bev, void *arg)
 			continue;
 		}
 
-		// read packet body (h264 data)
+		// read packet body
 		body = evbuffer_pullup(input, packet.length);
 		if (!body) {
 			fprintf(stderr, "major_version:%d, minor_version:%d, length:%d evbuffer pullup\n",
@@ -248,6 +241,7 @@ void RpcServer::decode(const std::string &message_in, std::string &message_out)
 		}
 
 		service = iter->second;
+
 		serviceDesc = service->GetDescriptor();
 		if (!serviceDesc) {
 			std::cout << "Do not Find Descriptor, service: " << message.service() << std::endl;
