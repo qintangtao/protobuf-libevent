@@ -8,8 +8,81 @@
 static int use_thread_pool = 0; 
 static struct timeval tv_read = { 30, 0 };
 
-static void
-read_cb(struct bufferevent *bev, void *arg)
+
+
+
+
+RpcServer::RpcServer(unsigned short port)
+	: m_base(NULL)
+	, m_listener(NULL)
+	, m_threadid(0)
+{
+	m_spServiceMap.insert(std::make_pair("EchoService", new EchoServiceImpl()));
+	
+	m_base = event_base_new();
+	if (!m_base) {
+		fprintf(stderr, "Couldn't create an event_base: exiting\n");
+		exit(EXIT_FAILURE);
+	}
+
+	struct sockaddr_in sin = { 0 };
+	sin.sin_family = AF_INET;
+	sin.sin_port = htons(port);
+
+	m_listener = evconnlistener_new_bind(m_base, accept_socket_cb, (void *)this,
+		LEV_OPT_REUSEABLE | LEV_OPT_CLOSE_ON_FREE, -1,
+		(struct sockaddr *)&sin, sizeof(sin));
+	if (!m_listener) {
+		fprintf(stderr, "Could not create a listener!\n");
+		exit(EXIT_FAILURE);
+	}
+
+	m_threadid = sys_os_create_thread(&RpcServer::worker, this);
+}
+
+RpcServer::~RpcServer()
+{
+	if (m_base)
+		event_base_loopbreak(m_base);
+
+	while (m_threadid != 0)
+		USleep(1000);
+
+	if (m_listener)
+		evconnlistener_free(m_listener);
+
+	if (m_base)
+		event_base_free(m_base);
+}
+
+void *RpcServer::worker(void *arg)
+{
+	RpcServer *pServer = (RpcServer *)arg;
+
+	event_base_dispatch(pServer->m_base);
+
+	pServer->m_threadid = 0;
+
+	return NULL;
+}
+
+void
+RpcServer::accept_socket_cb(struct evconnlistener *listener, evutil_socket_t fd,
+	struct sockaddr *sa, int socklen, void *arg)
+{
+	RpcServer *pServer = (RpcServer *)arg;
+
+	if (use_thread_pool) {
+		//struct eveasy_thread_pool *pool = arg;
+		//eveasy_thread_pool_assign(pool, fd, sa, socklen);
+	}
+	else {
+		create_bufferevent_socket(pServer->m_base, fd, arg);
+	}
+}
+
+
+void RpcServer::read_cb(struct bufferevent *bev, void *arg)
 {
 	RpcServer *pServer = (RpcServer *)arg;
 	struct evbuffer *input = bufferevent_get_input(bev);
@@ -94,8 +167,7 @@ read_cb(struct bufferevent *bev, void *arg)
 	}
 }
 
-static void
-event_cb(struct bufferevent *bev, short events, void *user_data)
+void RpcServer::event_cb(struct bufferevent *bev, short events, void *arg)
 {
 	if (events & BEV_EVENT_EOF) {
 		printf("Connection closed.\n");
@@ -115,8 +187,7 @@ event_cb(struct bufferevent *bev, short events, void *user_data)
 	bufferevent_free(bev);
 }
 
-static struct bufferevent *
-create_bufferevent_socket(struct event_base *base, evutil_socket_t fd, void *arg)
+struct bufferevent *RpcServer::create_bufferevent_socket(struct event_base *base, evutil_socket_t fd, void *arg)
 {
 	struct bufferevent *bev;
 
@@ -127,7 +198,7 @@ create_bufferevent_socket(struct event_base *base, evutil_socket_t fd, void *arg
 		goto err;
 	}
 
-	bufferevent_setcb(bev, read_cb, NULL, event_cb, arg);
+	bufferevent_setcb(bev, &RpcServer::read_cb, NULL, &RpcServer::event_cb, arg);
 	bufferevent_set_timeouts(bev, &tv_read, NULL);
 	bufferevent_enable(bev, EV_READ | EV_WRITE);
 
@@ -137,63 +208,6 @@ err:
 	evutil_closesocket(fd);
 
 	return NULL;
-}
-
-static void
-accept_socket_cb(struct evconnlistener *listener, evutil_socket_t fd,
-	struct sockaddr *sa, int socklen, void *arg)
-{
-	if (use_thread_pool) {
-		//struct eveasy_thread_pool *pool = arg;
-		//eveasy_thread_pool_assign(pool, fd, sa, socklen);
-	}
-	else {
-		RpcServer *pServer = (RpcServer *)arg;
-		create_bufferevent_socket(pServer->base(), fd, arg);
-	}
-}
-
-RpcServer::RpcServer(unsigned short port)
-	: m_base(NULL)
-	, m_listener(NULL)
-	, m_threadid(0)
-{
-	m_spServiceMap.insert(std::make_pair("EchoService", new EchoServiceImpl()));
-	
-	m_base = event_base_new();
-	if (!m_base) {
-		fprintf(stderr, "Couldn't create an event_base: exiting\n");
-		exit(EXIT_FAILURE);
-	}
-
-	struct sockaddr_in sin = { 0 };
-	sin.sin_family = AF_INET;
-	sin.sin_port = htons(port);
-
-	m_listener = evconnlistener_new_bind(m_base, accept_socket_cb, (void *)this,
-		LEV_OPT_REUSEABLE | LEV_OPT_CLOSE_ON_FREE, -1,
-		(struct sockaddr *)&sin, sizeof(sin));
-	if (!m_listener) {
-		fprintf(stderr, "Could not create a listener!\n");
-		exit(EXIT_FAILURE);
-	}
-
-	m_threadid = sys_os_create_thread(&RpcServer::worker, this);
-}
-
-RpcServer::~RpcServer()
-{
-	if (m_base)
-		event_base_loopbreak(m_base);
-
-	while (m_threadid != 0)
-		USleep(1000);
-
-	if (m_listener)
-		evconnlistener_free(m_listener);
-
-	if (m_base)
-		event_base_free(m_base);
 }
 
 void RpcServer::decode(const std::string &message_in, std::string &message_out)
@@ -272,15 +286,4 @@ void RpcServer::decode(const std::string &message_in, std::string &message_out)
 		delete request;
 	if (response)
 		delete response;
-}
-
-void *RpcServer::worker(void *arg)
-{
-	RpcServer *pServer = (RpcServer *)arg;
-
-	event_base_dispatch(pServer->m_base);
-
-	pServer->m_threadid = 0;
-
-	return NULL;
 }
