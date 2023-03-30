@@ -12,9 +12,14 @@ void DoneCallback(google::protobuf::RpcController* controller, google::protobuf:
 {
 	do 
 	{
+		EchoRequest *echoReqeust = dynamic_cast<EchoRequest *>(reqeust);
 		EchoResponse *echoResponse = dynamic_cast<EchoResponse *>(response);
-		if (echoResponse)
+		if (echoReqeust && echoResponse)
 		{
+			std::cout << "echoReqeust: ";
+
+			std::cout << echoReqeust->message() << std::endl;
+
 			std::cout << "echoResponse: ";
 
 			if (controller->IsCanceled())
@@ -32,9 +37,14 @@ void DoneCallback(google::protobuf::RpcController* controller, google::protobuf:
 			break;
 		}
 
+		AddRequest *addReqeust = dynamic_cast<AddRequest *>(reqeust);
 		AddResponse *addResponse = dynamic_cast<AddResponse *>(response);
-		if (addResponse)
+		if (addReqeust && addResponse)
 		{
+			std::cout << "AddRequest: ";
+
+			std::cout << addReqeust->a() << " + " << addReqeust->b() << std::endl;
+
 			std::cout << "addResponse: ";
 
 			if (controller->IsCanceled())
@@ -84,7 +94,7 @@ int main()
 #endif
 
 	RpcServer *server = new RpcServer(9206);
-	RpcChannelImpl *channel = new RpcChannelImpl("127.0.0.1:9207");
+	RpcChannelImpl *channel = new RpcChannelImpl("127.0.0.1:9206");
 	
 	
 	EchoService_Stub service(channel);

@@ -198,8 +198,8 @@ void RpcChannelImpl::read_cb(struct bufferevent *bev, void *arg)
 		evbuffer_drain(input, sizeof(RPC_PACKET));
 
 		if (packet.length == 0) {
-			fprintf(stderr, "major_version:%d, minor_version:%d, length:%d\n",
-				packet.major_version, packet.minor_version, packet.length);
+			//fprintf(stderr, "major_version:%d, minor_version:%d, length:%d\n",
+			//	packet.major_version, packet.minor_version, packet.length);
 			continue;
 		}
 
