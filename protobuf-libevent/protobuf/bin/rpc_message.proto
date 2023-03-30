@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+//package google.protobuf;
+
+// 消息类型
+enum MessageType
+{
+	RPC_TYPE_UNKNOWN = 0;
+	RPC_TYPE_REQUEST = 1;
+	RPC_TYPE_RESPONSE = 2;
+	RPC_TYPE_ERROR = 3;
+}
+
+// 错误程式码
+enum ErrorCode
+{
+	RPC_ERR_OK = 0;
+	RPC_ERR_NO_SERVICE = 1;
+	RPC_ERR_NO_METHOD = 2;
+	RPC_ERR_INVALID_REQUEST = 3;
+	RPC_ERR_INVALID_RESPONSE = 4;
+}
+
+message RpcMessage
+{
+	MessageType type = 1;		// 消息类型
+	uint64      id   = 2;		// 消息id
+	string service   = 3;		// 服务名称
+	string method    = 4;		// 方法名称
+	ErrorCode error  = 5;		// 错误程式码
+
+	bytes request    = 100;		// 请求数据
+	bytes response   = 101;		// 响应数据
+}

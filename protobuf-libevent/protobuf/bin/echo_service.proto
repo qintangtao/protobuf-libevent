@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+//package google.protobuf;
+
+option cc_generic_services = true;
+
+message EchoRequest {
+	string message =  1;
+}
+
+message EchoResponse {
+	string message = 1;
+}
+
+message AddRequest {
+	int32 a = 1;
+	int32 b = 2;
+}
+
+message AddResponse {
+	int32 result = 1;
+}
+
+service EchoService {
+	rpc Echo(EchoRequest) returns(EchoResponse);
+	rpc Add(AddRequest) returns(AddResponse);
+}
