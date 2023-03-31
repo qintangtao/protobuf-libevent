@@ -323,15 +323,11 @@ void RpcChannelImpl::event_cb(struct bufferevent *bev, short events, void *arg)
 
 	if (events & BEV_EVENT_EOF) {
 		fprintf(stdout, "Connection closed.\n");
-	}
-	else if (events & BEV_EVENT_ERROR) {
+	} else if (events & BEV_EVENT_ERROR) {
 		fprintf(stdout, "Got an error on the connection\n"); /*XXX win32*/
-	}
-	else if (events & BEV_EVENT_TIMEOUT) {
+	} else if (events & BEV_EVENT_TIMEOUT) {
 		fprintf(stdout, "Connection timeout.\n");
-	}
-	else if (events & BEV_EVENT_CONNECTED)
-	{
+	} else if (events & BEV_EVENT_CONNECTED) {
 		CHANNEL_BEV_LOCK(pChannel);
 		pChannel->m_bev = bev;
 		CHANNEL_BEV_UNLOCK(pChannel);
@@ -339,8 +335,7 @@ void RpcChannelImpl::event_cb(struct bufferevent *bev, short events, void *arg)
 		pChannel->send_request_cache();
 
 		return;
-	}
-	else {
+	} else {
 		return;
 	}
 
@@ -449,8 +444,9 @@ void RpcChannelImpl::decode(const std::string &message_str)
 		if (!del_callback_cache(message.id(), cache))
 			break;
 
-		// 没有取消则解析response
-		if (cache.controller && !cache.controller->IsCanceled()) {
+		if (cache.controller && cache.controller->IsCanceled()) {
+			// Canceled
+		} else {
 			if (message.error() == RPC_ERR_OK) {
 				if (cache.response && !cache.response->ParseFromString(message.response())) {
 					if (cache.controller)
@@ -592,7 +588,7 @@ bool RpcChannelImpl::del_callback_cache(uint64_t id, struct callback_cache &cach
 	CHANNEL_CALLBACK_CACHE_LOCK(this);
 	iter = m_callback_cache.find(id);
 	if (iter == m_callback_cache.end()) {
-		std::cout << "Do not Find, id: " << id << std::endl;
+		//std::cout << "Do not Find, id: " << id << std::endl;
 		CHANNEL_CALLBACK_CACHE_UNLOCK(this);
 		return false;
 	}
