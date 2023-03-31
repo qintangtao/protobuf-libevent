@@ -7,7 +7,7 @@
 static struct timeval tv_read		= { 30, 0 };
 static struct timeval tv_connect	= { 5, 0 };
 static struct timeval tv_heartbeat	= { 10, 0 };
-static struct timeval tv_request	= { 6, 0 };
+static struct timeval tv_request	= { 10, 0 };
 
 #define CHANNEL_BEV_LOCK(b)        \
 	do {                             \
@@ -436,6 +436,7 @@ void RpcChannelImpl::decode(const std::string &message_str)
 			<< std::endl;
 #endif
 
+		// invalid or timeout
 		if (!del_callback_cache(message.id(), cache))
 			break;
 

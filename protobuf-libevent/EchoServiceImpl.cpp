@@ -15,7 +15,7 @@ void *echo_worker(void *arg)
 {
 	::google::protobuf::Closure* done = (::google::protobuf::Closure*)arg;
 
-	USleep(8 * 1000 * 1000);
+	USleep(18 * 1000 * 1000);
 
 	done->Run();
 
