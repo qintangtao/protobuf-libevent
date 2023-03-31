@@ -1,6 +1,7 @@
 #pragma once
 #include <google/protobuf/service.h>
 #include <stdint.h>
+#include <queue>
 
 namespace google {
 	namespace protobuf {
@@ -45,7 +46,7 @@ struct bufferevent;
 struct event;
 
 
-struct request_cache {
+struct callback_cache {
 	google::protobuf::RpcController* controller;
 	google::protobuf::Message* response;
 	google::protobuf::Closure* done;
@@ -73,10 +74,17 @@ private:
 	
 	struct bufferevent *create_bufferevent_socket();
 
+	void send_no_lock(const std::string &message_str);
+
 	void decode(const std::string &message_str);
 
-	void add_request_cache(uint64_t id, const struct request_cache &cache);
-	bool del_request_cache(uint64_t id, struct request_cache &cache);
+	void add_request_cache(uint64_t id, const std::string &message_str);
+	bool del_request_cache(uint64_t id, std::string &message_str);
+	bool del_request_cache_first(std::string &message_str);
+	bool has_request_cache(uint64_t id);
+
+	void add_callback_cache(uint64_t id, const struct callback_cache &cache);
+	bool del_callback_cache(uint64_t id, struct callback_cache &cache);
 
 private:
 	uint64_t			m_id;
@@ -91,8 +99,11 @@ private:
 	struct sockaddr_storage m_connect_to_addr;
 	int					m_connect_to_addrlen;
 
-	std::map<uint64_t, struct request_cache> m_cache;
-	void				*m_cache_lock;
+	std::map<uint64_t, std::string>				m_request_cache;
+	void										*m_request_cache_lock;
+
+	std::map<uint64_t, struct callback_cache>	m_callback_cache;
+	void										*m_callback_cache_lock;
 	
 };
 

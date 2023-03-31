@@ -96,9 +96,11 @@ int main()
 	RpcServer *server = new RpcServer(9206);
 	RpcChannelImpl *channel = new RpcChannelImpl("127.0.0.1:9206");
 	
-	
-	EchoService_Stub service(channel);
 
+	USleep(3 * 1000 * 1000);
+
+
+	EchoService_Stub service(channel);
 	{
 		EchoRequest *request = new EchoRequest();
 		EchoResponse *response = new EchoResponse();
@@ -113,7 +115,7 @@ int main()
 	USleep(3 * 1000 * 1000);
 
 #if 1
-	for (int i = 0; i < 100; i++)
+	for (int i = 0; i < 20; i++)
 	{
 		AddRequest *request = new AddRequest();
 		AddResponse *response = new AddResponse();
@@ -128,7 +130,7 @@ int main()
 #endif
 
 
-	USleep(60*1000*1000);
+	getchar();
 
 	delete server;
 	delete channel;
