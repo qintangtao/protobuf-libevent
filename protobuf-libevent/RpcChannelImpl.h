@@ -45,7 +45,6 @@ struct event_base;
 struct bufferevent;
 struct event;
 
-
 struct callback_cache {
 	google::protobuf::RpcController* controller;
 	google::protobuf::Message* response;

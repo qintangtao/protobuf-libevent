@@ -11,6 +11,18 @@ EchoServiceImpl::~EchoServiceImpl()
 {
 }
 
+void *echo_worker(void *arg)
+{
+	::google::protobuf::Closure* done = (::google::protobuf::Closure*)arg;
+
+	USleep(8 * 1000 * 1000);
+
+	done->Run();
+
+	return NULL;
+}
+
+
 void EchoServiceImpl::Echo(::PROTOBUF_NAMESPACE_ID::RpcController* controller,
 	const ::EchoRequest* request,
 	::EchoResponse* response,
@@ -18,10 +30,7 @@ void EchoServiceImpl::Echo(::PROTOBUF_NAMESPACE_ID::RpcController* controller,
 {
 	response->set_message(request->message() + ", welcome!");
 
-	USleep(8 * 1000 * 1000);
-
-	if (done)
-		done->Run();
+	sys_os_create_thread(&echo_worker, done);
 }
 
 void EchoServiceImpl::Add(::PROTOBUF_NAMESPACE_ID::RpcController* controller,
@@ -34,6 +43,5 @@ void EchoServiceImpl::Add(::PROTOBUF_NAMESPACE_ID::RpcController* controller,
 
 	response->set_result(a + b);
 
-	if (done)
-		done->Run();
+	done->Run();
 }

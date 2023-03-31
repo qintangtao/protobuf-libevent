@@ -166,11 +166,6 @@ RpcChannelImpl::~RpcChannelImpl()
 	EVTHREAD_FREE_LOCK(m_callback_cache_lock, EVTHREAD_LOCKTYPE_READWRITE);
 }
 
-struct request_timeout {
-	uint64_t id;
-	void *arg;
-};
-
 void RpcChannelImpl::CallMethod(const google::protobuf::MethodDescriptor* method,
 	google::protobuf::RpcController* controller, const google::protobuf::Message* request,
 	google::protobuf::Message* response, google::protobuf::Closure* done)
@@ -555,7 +550,7 @@ void RpcChannelImpl::guess_callback_cache()
 			// check request timeout
 			evutil_timersub(&te, &cache.tv, &ts);
 
-			if ((ts.tv_sec * 1000000L + ts.tv_usec) < 6000000L)
+			if ((ts.tv_sec * 1000000L + ts.tv_usec) < 12000000L)
 				break;
 
 			// del from request cache

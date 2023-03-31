@@ -8,11 +8,11 @@
 #include "RpcControllerImpl.h"
 #include "RpcServer.h"
 
-void DoneCallback(google::protobuf::RpcController* controller, google::protobuf::Message *reqeust, google::protobuf::Message *response)
+void DoneCallback(google::protobuf::RpcController* controller, google::protobuf::Message *request, google::protobuf::Message *response)
 {
 	do 
 	{
-		EchoRequest *echoReqeust = dynamic_cast<EchoRequest *>(reqeust);
+		EchoRequest *echoReqeust = dynamic_cast<EchoRequest *>(request);
 		EchoResponse *echoResponse = dynamic_cast<EchoResponse *>(response);
 		if (echoReqeust && echoResponse)
 		{
@@ -37,7 +37,7 @@ void DoneCallback(google::protobuf::RpcController* controller, google::protobuf:
 			break;
 		}
 
-		AddRequest *addReqeust = dynamic_cast<AddRequest *>(reqeust);
+		AddRequest *addReqeust = dynamic_cast<AddRequest *>(request);
 		AddResponse *addResponse = dynamic_cast<AddResponse *>(response);
 		if (addReqeust && addResponse)
 		{
@@ -66,8 +66,8 @@ void DoneCallback(google::protobuf::RpcController* controller, google::protobuf:
 	
 	if (controller)
 		delete controller;
-	if (reqeust)
-		delete reqeust;
+	if (request)
+		delete request;
 	if (response)
 		delete response;
 }

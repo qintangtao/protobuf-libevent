@@ -1,26 +1,119 @@
 #include "pch.h"
 #include "RpcServer.h"
 #include "EchoServiceImpl.h"
+#include "RpcControllerImpl.h"
+#include<iostream>
+#include<fstream>
+#include<sstream>
 
 static int use_thread_pool = 0; 
 static struct timeval tv_read = { 30, 0 };
+
+#define RPC_CLIENT_CACHE_LOCK(b)        \
+	do {                             \
+		if (b)                       \
+			EVLOCK_LOCK(b->m_client_cache_lock, 0); \
+	} while (0)
+
+#define RPC_CLIENT_CACHE_UNLOCK(b)        \
+	do {                               \
+		if (b)                         \
+			EVLOCK_UNLOCK(b->m_client_cache_lock, 0); \
+	} while (0)
+
+class RpcServerClosure : public google::protobuf::Closure {
+public:
+	typedef void(*FunctionType)(
+		const std::string &addr,
+		RpcMessage &message,
+		RpcServer *server,
+		google::protobuf::RpcController* controller, 
+		google::protobuf::Message *request, 
+		google::protobuf::Message *response);
+	
+	RpcServerClosure(FunctionType function, RpcServer *server, const std::string &addr, bool self_deleting=true)
+		: function_(function), server_(server), addr_(addr), self_deleting_(self_deleting)
+		, controller(NULL), request(NULL), response(NULL) {}
+	~RpcServerClosure() {}
+
+	void Run() override {
+		bool needs_delete = self_deleting_;  // read in case callback deletes
+		function_(addr_, message, server_, controller, request, response);
+		if (needs_delete) delete this;
+	}
+
+	RpcMessage message;
+	google::protobuf::RpcController* controller;
+	google::protobuf::Message *request;
+	google::protobuf::Message *response;
+
+private:
+	FunctionType function_;
+	bool self_deleting_;
+	std::string addr_;
+	RpcServer *server_;
+};
+
+
+static std::string get_bev_addr(struct bufferevent *bev)
+{
+	struct sockaddr_storage ss;
+	evutil_socket_t fd = bufferevent_getfd(bev);
+	ev_socklen_t socklen = sizeof(ss);
+	char addrbuf[128];
+	void *inaddr = NULL;
+	const char *addr;
+	uint16_t got_port = -1;
+
+	memset(&ss, 0, sizeof(ss));
+	if (getpeername(fd, (struct sockaddr *)&ss, &socklen)) {
+		perror("getsockname() failed");
+		exit(EXIT_FAILURE);
+		return std::string();
+	}
+
+	if (ss.ss_family == AF_INET) {
+		got_port = ntohs(((struct sockaddr_in *)&ss)->sin_port);
+		inaddr = &((struct sockaddr_in *)&ss)->sin_addr;
+	}
+	else if (ss.ss_family == AF_INET6) {
+		got_port = ntohs(((struct sockaddr_in6 *)&ss)->sin6_port);
+		inaddr = &((struct sockaddr_in6 *)&ss)->sin6_addr;
+	}
+
+	addr = evutil_inet_ntop(ss.ss_family, inaddr, addrbuf, sizeof(addrbuf));
+	if (addr) {
+		//printf("%s:%d\n", addr, got_port);
+		std::stringstream sss;
+		sss << addr << ":" << got_port;
+		std::string str = sss.str();
+		return str;
+	}
+	else {
+		fprintf(stderr, "evutil_inet_ntop failed\n");
+		exit(EXIT_FAILURE);
+		return std::string();
+	}
+}
 
 RpcServer::RpcServer(unsigned short port)
 	: m_base(NULL)
 	, m_listener(NULL)
 	, m_threadid(0)
 {
+	struct sockaddr_in sin = { 0 };
+	sin.sin_family = AF_INET;
+	sin.sin_port = htons(port);
+
 	m_spServiceMap.insert(std::make_pair("EchoService", new EchoServiceImpl()));
+	
+	EVTHREAD_ALLOC_LOCK(m_client_cache_lock, EVTHREAD_LOCKTYPE_READWRITE);
 	
 	m_base = event_base_new();
 	if (!m_base) {
 		fprintf(stderr, "Couldn't create an event_base: exiting\n");
 		exit(EXIT_FAILURE);
 	}
-
-	struct sockaddr_in sin = { 0 };
-	sin.sin_family = AF_INET;
-	sin.sin_port = htons(port);
 
 	m_listener = evconnlistener_new_bind(m_base, accept_socket_cb, (void *)this,
 		LEV_OPT_REUSEABLE | LEV_OPT_CLOSE_ON_FREE, -1,
@@ -46,6 +139,8 @@ RpcServer::~RpcServer()
 
 	if (m_base)
 		event_base_free(m_base);
+
+	EVTHREAD_FREE_LOCK(m_client_cache_lock, EVTHREAD_LOCKTYPE_READWRITE);
 }
 
 void *RpcServer::worker(void *arg)
@@ -59,27 +154,30 @@ void *RpcServer::worker(void *arg)
 	return NULL;
 }
 
-void
-RpcServer::accept_socket_cb(struct evconnlistener *listener, evutil_socket_t fd,
-	struct sockaddr *sa, int socklen, void *arg)
+void RpcServer::accept_socket_cb(struct evconnlistener *listener, 
+	evutil_socket_t fd, struct sockaddr *sa, int socklen, void *arg)
 {
 	RpcServer *pServer = (RpcServer *)arg;
+	struct bufferevent *bev;
 
 	if (use_thread_pool) {
 		//struct eveasy_thread_pool *pool = arg;
 		//eveasy_thread_pool_assign(pool, fd, sa, socklen);
 	}
 	else {
-		create_bufferevent_socket(pServer->m_base, fd, arg);
+		bev = create_bufferevent_socket(pServer->m_base, fd, arg);
+		if (bev) {
+			pServer->add_client_cache(get_bev_addr(bev), bev);
+		}
 	}
 }
-
 
 void RpcServer::read_cb(struct bufferevent *bev, void *arg)
 {
 	RpcServer *pServer = (RpcServer *)arg;
 	struct evbuffer *input = bufferevent_get_input(bev);
 	struct evbuffer *output = bufferevent_get_output(bev);
+	std::string addr = get_bev_addr(bev);
 	RPC_PACKET packet;
 	unsigned char *body;
 	ev_ssize_t total, size;
@@ -135,25 +233,8 @@ void RpcServer::read_cb(struct bufferevent *bev, void *arg)
 			break;
 		}
 
-		if (pServer) {
-
-			std::string message_in((const char *)body, packet.length);
-			std::string message_out;
-
-			pServer->decode(message_in, message_out);
-
-			if (!message_out.empty()) {
-
-				size = packet.length;
-
-				packet.length = (unsigned int)message_out.size();
-
-				evbuffer_add(output, &packet, sizeof(RPC_PACKET));
-				evbuffer_add(output, message_out.c_str(), message_out.size());
-
-				packet.length = (unsigned int)size;
-			}
-		}
+		if (pServer)
+			pServer->decode(addr, std::string((const char *)body, packet.length));
 
 		// remove packet body data
 		evbuffer_drain(input, packet.length);
@@ -162,6 +243,8 @@ void RpcServer::read_cb(struct bufferevent *bev, void *arg)
 
 void RpcServer::event_cb(struct bufferevent *bev, short events, void *arg)
 {
+	RpcServer *pServer = (RpcServer *)arg;
+
 	if (events & BEV_EVENT_EOF) {
 		printf("Connection closed.\n");
 	}
@@ -175,9 +258,47 @@ void RpcServer::event_cb(struct bufferevent *bev, short events, void *arg)
 		return;
 	}
 
+	pServer->del_client_cache(get_bev_addr(bev));
+
 	/* None of the other events can happen here, since we haven't enabled
 	 * timeouts */
 	bufferevent_free(bev);
+}
+
+void RpcServer::done_cb(const std::string &addr, RpcMessage &message, RpcServer *server,
+	google::protobuf::RpcController* controller, google::protobuf::Message *request, google::protobuf::Message *response)
+{
+	struct bufferevent *bev;
+
+	do 
+	{
+		if (!server)
+			break;
+
+		if (controller && controller->IsCanceled())
+			break;
+
+		if (response)
+			message.set_response(response->SerializeAsString());
+
+		std::string message_str;
+		message.SerializeToString(&message_str);
+
+		// send to client
+		RPC_CLIENT_CACHE_LOCK(server);
+		bev = server->lookup_client_cache_no_lock(addr);
+		if (bev)
+			server->send_no_lock(bev, message_str);
+		RPC_CLIENT_CACHE_UNLOCK(server);
+
+	} while (0);
+
+	if (controller)
+		delete controller;
+	if (request)
+		delete request;
+	if (response)
+		delete response;
 }
 
 struct bufferevent *RpcServer::create_bufferevent_socket(struct event_base *base, evutil_socket_t fd, void *arg)
@@ -203,40 +324,60 @@ err:
 	return NULL;
 }
 
-void RpcServer::decode(const std::string &message_in, std::string &message_out)
+void RpcServer::send_no_lock(struct bufferevent *bev, const std::string &message_str)
+{
+	struct evbuffer *output = bufferevent_get_output(bev);
+
+	RPC_PACKET packet;
+	memcpy(packet.magic, RPC_MAGIC, sizeof(packet.magic));
+	packet.major_version = RPC_MAJOR_VERSION;
+	packet.minor_version = RPC_MINOR_VERSION;
+	packet.length = (unsigned int)message_str.size();
+
+	// 多线程中调用，会存在数据不连续的情况（使用了两次evbuffer_add， 最好改成1次）
+	evbuffer_add(output, &packet, sizeof(RPC_PACKET));
+	evbuffer_add(output, message_str.c_str(), message_str.size());
+}
+
+void RpcServer::decode(const std::string &addr, const std::string &message_str)
 {
 	std::map<std::string, google::protobuf::Service *>::iterator iter;
 	const google::protobuf::ServiceDescriptor *serviceDesc;
 	const google::protobuf::MethodDescriptor *methodDesc;
 	google::protobuf::Service *service;
-	google::protobuf::Message *request = NULL;
-	google::protobuf::Message *response = NULL;
-	enum ErrorCode errCode = RPC_ERR_OK;
-
+	RpcServerClosure* done = NULL;
 	RpcMessage message;
-	if (!message.ParseFromString(message_in)) {
-		std::cout << "Parse message failed!" << std::endl;
-		return;
-	}
-
-#ifndef NDEBUG
-	std::cout << "server -> "
-		<< "size: " << message_in.size()
-		<< ", type: " << message.type()
-		<< ", id: " << message.id()
-		<< ", service: " << message.service()
-		<< ", method: " << message.method()
-		<< ", error: " << message.error()
-		<< ", request: " << message.request().size()
-		<< std::endl;
-#endif
 
 	do
 	{
+		if (!message.ParseFromString(message_str)) {
+			std::cout << "Parse message failed!" << std::endl;
+			break;
+		}
+
+#ifndef NDEBUG
+		std::cout << "server -> "
+			<< "size: " << message_str.size()
+			<< ", type: " << message.type()
+			<< ", id: " << message.id()
+			<< ", service: " << message.service()
+			<< ", method: " << message.method()
+			<< ", error: " << message.error()
+			<< ", request: " << message.request().size()
+			<< std::endl;
+#endif
+
+		done = new RpcServerClosure(&RpcServer::done_cb, this, addr);
+		done->message.set_type(RPC_TYPE_RESPONSE);
+		done->message.set_id(message.id());
+		done->message.set_service(message.service());
+		done->message.set_method(message.method());
+		done->message.set_error(RPC_ERR_OK);
+
 		iter = m_spServiceMap.find(message.service());
 		if (iter == m_spServiceMap.end()) {
 			std::cout << "Do not Find, service: " << message.service() << std::endl;
-			errCode = RPC_ERR_NO_SERVICE;
+			done->message.set_error(RPC_ERR_NO_SERVICE);
 			break;
 		}
 
@@ -245,39 +386,76 @@ void RpcServer::decode(const std::string &message_in, std::string &message_out)
 		serviceDesc = service->GetDescriptor();
 		if (!serviceDesc) {
 			std::cout << "Do not Find Descriptor, service: " << message.service() << std::endl;
-			errCode = RPC_ERR_NO_SERVICE;
+			done->message.set_error(RPC_ERR_NO_SERVICE);
 			break;
 		}
 
 		methodDesc = serviceDesc->FindMethodByName(message.method());
 		if (!methodDesc) {
 			std::cout << "Do not Find, method: " << message.method() << std::endl;
-			errCode = RPC_ERR_NO_METHOD;
+			done->message.set_error(RPC_ERR_NO_METHOD);
 			break;
 		}
 
 		// 构造 request & response 对象
-		request = service->GetRequestPrototype(methodDesc).New();
-		response = service->GetResponsePrototype(methodDesc).New();
+		done->request = service->GetRequestPrototype(methodDesc).New();
+		done->response = service->GetResponsePrototype(methodDesc).New();
 
-		if (!request->ParseFromString(message.request())) {
+		if (!done->request->ParseFromString(message.request())) {
 			std::cout << "Parse reqeust failed!" << std::endl;
-			errCode = RPC_ERR_INVALID_REQUEST;
+			done->message.set_error(RPC_ERR_INVALID_REQUEST);
 			break;
 		}
-	
-		service->CallMethod(methodDesc, NULL, request, response, NULL);
+
+		done->controller = new RpcControllerImpl();
+
+		// 优化，可以放入工作线程池中（可以分成网络线程池和工作线程池）
+		service->CallMethod(methodDesc, done->controller, done->request, done->response, done);
+
+		return;
 
 	} while (0);
 
-	message.set_type(RPC_TYPE_RESPONSE);
-	message.set_error(errCode);
-	message.set_request(std::string());
-	if (response) message.set_response(response->SerializeAsString());
-	message.SerializeToString(&message_out);
+	if (done)
+		done->Run();
+}
 
-	if (request)
-		delete request;
-	if (response)
-		delete response;
+void RpcServer::add_client_cache(const std::string &addr, struct bufferevent *bev)
+{
+	RPC_CLIENT_CACHE_LOCK(this);
+	m_client_cache.insert(std::make_pair(addr, bev));
+	RPC_CLIENT_CACHE_UNLOCK(this);
+}
+
+struct bufferevent *RpcServer::del_client_cache(const std::string &addr)
+{
+	std::map<std::string, struct bufferevent *>::iterator iter;
+	struct bufferevent *bev;
+
+	RPC_CLIENT_CACHE_LOCK(this);
+	iter = m_client_cache.find(addr);
+	if (iter == m_client_cache.end()) {
+		RPC_CLIENT_CACHE_UNLOCK(this);
+		return NULL;
+	}
+
+	bev = iter->second;
+
+	// del from cache
+	m_client_cache.erase(iter);
+
+	RPC_CLIENT_CACHE_UNLOCK(this);
+
+	return bev;
+}
+
+struct bufferevent *RpcServer::lookup_client_cache_no_lock(const std::string &addr)
+{
+	std::map<std::string, struct bufferevent *>::iterator iter;
+	
+	iter = m_client_cache.find(addr);
+	if (iter != m_client_cache.end())
+		return iter->second;
+	
+	return NULL;
 }
