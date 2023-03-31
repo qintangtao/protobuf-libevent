@@ -46,11 +46,9 @@ struct request_cache {
 	google::protobuf::Closure* done;
 };
 
-
 struct event_base;
 struct bufferevent;
 struct event;
-
 
 class RpcChannelImpl :
 	public google::protobuf::RpcChannel
@@ -77,15 +75,18 @@ private:
 private:
 	uint64_t			m_id;
 	RPC_PACKET			m_packet;
+	RPC_PACKET			m_packet_heartbeat;
 	unsigned long		m_threadid;
 	struct event_base	*m_base;
 	struct bufferevent  *m_bev;
+	void				*m_bev_lock;
 	struct event		*m_connect_timer;
 	struct event		*m_heartbeat_timer;
 	struct sockaddr_storage m_connect_to_addr;
 	int					m_connect_to_addrlen;
 
-	std::map<uint64_t, struct request_cache> m_mapRequests;
+	std::map<uint64_t, struct request_cache> m_cache;
+	void				*m_cache_lock;
 	
 };
 

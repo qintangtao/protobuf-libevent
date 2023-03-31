@@ -3,15 +3,66 @@
 #include "RpcControllerImpl.h"
 #include "rpc_message.pb.h"
 
+
 static struct timeval tv_read = { 30, 0 };
 static struct timeval tv_connect = { 5, 0 };
 static struct timeval tv_heartbeat = { 10, 0 };
 
 
+#define CHANNEL_BEV_LOCK(b)        \
+	do {                             \
+		if (b)                       \
+			EVLOCK_LOCK(b->m_bev_lock, 0); \
+	} while (0)
+
+#define CHANNEL_BEV_UNLOCK(b)        \
+	do {                               \
+		if (b)                         \
+			EVLOCK_UNLOCK(b->m_bev_lock, 0); \
+	} while (0)
+
+#define CHANNEL_CACHE_LOCK(b)        \
+	do {                             \
+		if (b)                       \
+			EVLOCK_LOCK(b->m_cache_lock, 0); \
+	} while (0)
+
+#define CHANNEL_CACHE_UNLOCK(b)        \
+	do {                               \
+		if (b)                         \
+			EVLOCK_UNLOCK(b->m_cache_lock, 0); \
+	} while (0)
+
+
+static const struct error_entry {
+	const enum ErrorCode code;
+	const char *error_str;
+} error_str_table[] = {
+	{RPC_ERR_OK, "RPC_ERR_OK"},
+	{RPC_ERR_NO_SERVICE, "RPC_ERR_NO_SERVICE"},
+	{RPC_ERR_NO_METHOD, "RPC_ERR_NO_METHOD"},
+	{RPC_ERR_INVALID_REQUEST, "RPC_ERR_INVALID_REQUEST"},
+	{RPC_ERR_INVALID_RESPONSE, "RPC_ERR_INVALID_RESPONSE"},
+	{ErrorCode_INT_MAX_SENTINEL_DO_NOT_USE_, "RPC_ERR_UNKNOWN"},
+};
+
+static const char *
+guess_error_str(enum ErrorCode code)
+{
+	const struct error_entry *ent;
+	for (ent = &error_str_table[0]; ent->code != ErrorCode_INT_MAX_SENTINEL_DO_NOT_USE_; ++ent) {
+		if (code == ent->code)
+			return ent->error_str;
+	}
+
+	return ent->error_str;
+}
+
 RpcChannelImpl::RpcChannelImpl(const char *ip_as_string)
 	: m_id(0)
 	, m_base(NULL)
 	, m_bev(NULL)
+	, m_bev_lock(NULL)
 	, m_connect_timer(NULL)
 	, m_heartbeat_timer(NULL)
 	, m_threadid(0)
@@ -20,6 +71,14 @@ RpcChannelImpl::RpcChannelImpl(const char *ip_as_string)
 	m_packet.major_version = RPC_MAJOR_VERSION;
 	m_packet.minor_version = RPC_MINOR_VERSION;
 
+	memcpy(m_packet_heartbeat.magic, RPC_MAGIC, sizeof(m_packet_heartbeat.magic));
+	m_packet_heartbeat.major_version = RPC_MAJOR_VERSION;
+	m_packet_heartbeat.minor_version = RPC_MINOR_VERSION;
+	m_packet_heartbeat.length = 0;
+
+	EVTHREAD_ALLOC_LOCK(m_bev_lock, EVTHREAD_LOCKTYPE_READWRITE);
+	EVTHREAD_ALLOC_LOCK(m_cache_lock, EVTHREAD_LOCKTYPE_READWRITE);
+	
 	memset(&m_connect_to_addr, 0, sizeof(m_connect_to_addr));
 	m_connect_to_addrlen = sizeof(m_connect_to_addr);
 	if (evutil_parse_sockaddr_port(ip_as_string, (struct sockaddr *)&m_connect_to_addr, &m_connect_to_addrlen) < 0) {
@@ -75,12 +134,16 @@ RpcChannelImpl::~RpcChannelImpl()
 
 	if (m_base)
 		event_base_free(m_base);
+
+	EVTHREAD_FREE_LOCK(m_bev_lock, EVTHREAD_LOCKTYPE_READWRITE);
+	EVTHREAD_FREE_LOCK(m_cache_lock, EVTHREAD_LOCKTYPE_READWRITE);
 }
 
 void RpcChannelImpl::CallMethod(const google::protobuf::MethodDescriptor* method,
 	google::protobuf::RpcController* controller, const google::protobuf::Message* request,
 	google::protobuf::Message* response, google::protobuf::Closure* done)
 {
+	CHANNEL_BEV_LOCK(this);
 	if (m_bev)
 	{
 		RpcMessage message;
@@ -97,7 +160,9 @@ void RpcChannelImpl::CallMethod(const google::protobuf::MethodDescriptor* method
 
 		// add to map
 		struct request_cache cache = { controller, response, done };
-		m_mapRequests.insert(std::make_pair(message.id(), cache));
+		CHANNEL_CACHE_LOCK(this);
+		m_cache.insert(std::make_pair(message.id(), cache));
+		CHANNEL_CACHE_UNLOCK(this);
 
 		m_packet.length = (unsigned int)message_str.size();
 
@@ -113,6 +178,7 @@ void RpcChannelImpl::CallMethod(const google::protobuf::MethodDescriptor* method
 		if (done)
 			done->Run();
 	}
+	CHANNEL_BEV_UNLOCK(this);
 }
 
 void *RpcChannelImpl::worker(void *arg)
@@ -129,9 +195,13 @@ void *RpcChannelImpl::worker(void *arg)
 void RpcChannelImpl::connect_time_cb(evutil_socket_t fd, short event, void *arg)
 {
 	RpcChannelImpl *pChannel = (RpcChannelImpl *)arg;
+	struct bufferevent *bev = pChannel->create_bufferevent_socket();
+	
+	CHANNEL_BEV_LOCK(pChannel);
+	pChannel->m_bev = bev;
+	CHANNEL_BEV_UNLOCK(pChannel);
 
-	pChannel->m_bev = pChannel->create_bufferevent_socket();
-	if (pChannel->m_bev)
+	if (bev)
 		return;
 
 	if (pChannel->m_connect_timer)
@@ -143,17 +213,12 @@ void RpcChannelImpl::heartbeat_time_cb(evutil_socket_t fd, short which, void *ar
 	RpcChannelImpl *pChannel = (RpcChannelImpl *)arg;
 	struct evbuffer *output;
 
-	if (!pChannel->m_bev)
-		return;
-
-	RPC_PACKET packet;
-	memcpy(packet.magic, RPC_MAGIC, sizeof(packet.magic));
-	packet.major_version = RPC_MAJOR_VERSION;
-	packet.minor_version = RPC_MINOR_VERSION;
-	packet.length = 0;
-
-	output = bufferevent_get_output(pChannel->m_bev);
-	evbuffer_add(output, &packet, sizeof(RPC_PACKET));
+	CHANNEL_BEV_LOCK(pChannel);
+	if (pChannel->m_bev) {
+		output = bufferevent_get_output(pChannel->m_bev);
+		evbuffer_add(output, &pChannel->m_packet_heartbeat, sizeof(RPC_PACKET));
+	}
+	CHANNEL_BEV_UNLOCK(pChannel);
 
 	evtimer_add(pChannel->m_heartbeat_timer, &tv_heartbeat);
 }
@@ -242,7 +307,9 @@ void RpcChannelImpl::event_cb(struct bufferevent *bev, short events, void *arg)
 		return;
 	}
 
+	CHANNEL_BEV_LOCK(pChannel);
 	pChannel->m_bev = NULL;
+	CHANNEL_BEV_UNLOCK(pChannel);
 	bufferevent_free(bev);
 
 	if (pChannel->m_connect_timer)
@@ -283,7 +350,6 @@ err:
 	return NULL;
 }
 
-
 void RpcChannelImpl::decode(const std::string &message_str)
 {
 	std::map<uint64_t, struct request_cache>::iterator iter;
@@ -312,9 +378,11 @@ void RpcChannelImpl::decode(const std::string &message_str)
 
 	do 
 	{
-		iter = m_mapRequests.find(message.id());
-		if (iter == m_mapRequests.end()) {
+		CHANNEL_CACHE_LOCK(this);
+		iter = m_cache.find(message.id());
+		if (iter == m_cache.end()) {
 			std::cout << "Do not Find, id: " << message.id() << std::endl;
+			CHANNEL_CACHE_UNLOCK(this);
 			break;
 		}
 
@@ -324,7 +392,8 @@ void RpcChannelImpl::decode(const std::string &message_str)
 		done = cache.done;
 
 		// del from map
-		m_mapRequests.erase(iter);
+		m_cache.erase(iter);
+		CHANNEL_CACHE_UNLOCK(this);
 
 		if (controller && controller->IsCanceled())
 			break;
@@ -345,34 +414,10 @@ void RpcChannelImpl::decode(const std::string &message_str)
 			}
 		}
 			break;
-		case RPC_ERR_NO_SERVICE:
-		{
-			if (controller)
-				controller->SetFailed("RPC_ERR_NO_SERVICE");
-		}
-			break;
-		case RPC_ERR_NO_METHOD:
-		{
-			if (controller)
-				controller->SetFailed("RPC_ERR_NO_METHOD");
-		}
-			break;
-		case RPC_ERR_INVALID_REQUEST:
-		{
-			if (controller)
-				controller->SetFailed("RPC_ERR_INVALID_REQUEST");
-		}
-			break;
-		case RPC_ERR_INVALID_RESPONSE:
-		{
-			if (controller)
-				controller->SetFailed("RPC_ERR_INVALID_RESPONSE");
-		}
-			break;
 		default:
 		{
 			if (controller)
-				controller->SetFailed("RPC_ERR_UNKNOWN");
+				controller->SetFailed(guess_error_str(message.error()));
 		}
 			break;
 		}

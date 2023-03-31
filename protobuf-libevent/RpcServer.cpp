@@ -265,7 +265,7 @@ void RpcServer::decode(const std::string &message_in, std::string &message_out)
 			errCode = RPC_ERR_INVALID_REQUEST;
 			break;
 		}
-
+	
 		service->CallMethod(methodDesc, NULL, request, response, NULL);
 
 	} while (0);

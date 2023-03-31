@@ -18,6 +18,7 @@
 #include <event2/thread.h>
 #include <event2/bufferevent.h>
 #include <event2/bufferevent_compat.h>
+#include <evthread-internal.h>
 
 #include "rpc.h"
 
