@@ -78,6 +78,8 @@ private:
 	
 	void send_heartbeat();
 
+	void send_request_cache();
+
 	void decode(const std::string &message_str);
 
 	void add_request_cache(uint64_t id, const std::string &message_str);

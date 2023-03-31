@@ -332,13 +332,11 @@ void RpcChannelImpl::event_cb(struct bufferevent *bev, short events, void *arg)
 	}
 	else if (events & BEV_EVENT_CONNECTED)
 	{
-		std::string message_str;
 		CHANNEL_BEV_LOCK(pChannel);
 		pChannel->m_bev = bev;
-		// 待发送的数据
-		while (pChannel->del_request_cache_first(message_str))
-			pChannel->send_no_lock(message_str);
 		CHANNEL_BEV_UNLOCK(pChannel);
+
+		pChannel->send_request_cache();
 
 		return;
 	}
@@ -407,6 +405,18 @@ void RpcChannelImpl::send_heartbeat()
 	if (m_bev) {
 		output = bufferevent_get_output(m_bev);
 		evbuffer_add(output, &m_packet_heartbeat, sizeof(RPC_PACKET));
+	}
+	CHANNEL_BEV_UNLOCK(this);
+}
+
+void RpcChannelImpl::send_request_cache()
+{
+	std::string message_str;
+
+	CHANNEL_BEV_LOCK(this);
+	if (m_bev) {
+		while (del_request_cache_first(message_str))
+			send_no_lock(message_str);
 	}
 	CHANNEL_BEV_UNLOCK(this);
 }
