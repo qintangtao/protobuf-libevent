@@ -1,0 +1,6 @@
+/protobuf-libevent/protobuf/lib/libprotobufd.lib
+/protobuf-libevent/protobuf/lib/libprotobuf-lited.lib
+/protobuf-libevent/protobuf/lib/libprotocd.lib
+/.vs
+/x64
+/protobuf-libevent/x64
