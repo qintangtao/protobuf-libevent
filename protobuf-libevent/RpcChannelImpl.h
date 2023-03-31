@@ -40,15 +40,17 @@ namespace google {
 	}
 }
 
+struct event_base;
+struct bufferevent;
+struct event;
+
+
 struct request_cache {
 	google::protobuf::RpcController* controller;
 	google::protobuf::Message* response;
 	google::protobuf::Closure* done;
+	struct event *request_timer;
 };
-
-struct event_base;
-struct bufferevent;
-struct event;
 
 class RpcChannelImpl :
 	public google::protobuf::RpcChannel
@@ -64,13 +66,17 @@ public:
 private:
 	static void *worker(void *arg); 
 	static void connect_time_cb(evutil_socket_t fd, short event, void *arg);
-	static void heartbeat_time_cb(evutil_socket_t fd, short which, void *arg);
+	static void heartbeat_time_cb(evutil_socket_t fd, short event, void *arg);
+	static void request_time_cb(evutil_socket_t fd, short event, void *arg);
 	static void read_cb(struct bufferevent *bev, void *arg);
 	static void event_cb(struct bufferevent *bev, short events, void *arg);
 	
 	struct bufferevent *create_bufferevent_socket();
 
 	void decode(const std::string &message_str);
+
+	void add_request_cache(uint64_t id, const struct request_cache &cache);
+	bool del_request_cache(uint64_t id, struct request_cache &cache);
 
 private:
 	uint64_t			m_id;

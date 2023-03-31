@@ -18,6 +18,8 @@ void EchoServiceImpl::Echo(::PROTOBUF_NAMESPACE_ID::RpcController* controller,
 {
 	response->set_message(request->message() + ", welcome!");
 
+	USleep(8 * 1000 * 1000);
+
 	if (done)
 		done->Run();
 }

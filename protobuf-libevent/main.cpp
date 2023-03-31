@@ -112,6 +112,7 @@ int main()
 
 	USleep(3 * 1000 * 1000);
 
+#if 1
 	for (int i = 0; i < 100; i++)
 	{
 		AddRequest *request = new AddRequest();
@@ -124,6 +125,7 @@ int main()
 
 		service.Add(controller, request, response, done);
 	}
+#endif
 
 
 	USleep(60*1000*1000);

@@ -85,12 +85,14 @@ enum ErrorCode : int {
   RPC_ERR_NO_METHOD = 2,
   RPC_ERR_INVALID_REQUEST = 3,
   RPC_ERR_INVALID_RESPONSE = 4,
+  RPC_ERR_REQUEST_TIMEOUT = 5,
+  RPC_ERR_NO_NETWORK = 6,
   ErrorCode_INT_MIN_SENTINEL_DO_NOT_USE_ = std::numeric_limits<int32_t>::min(),
   ErrorCode_INT_MAX_SENTINEL_DO_NOT_USE_ = std::numeric_limits<int32_t>::max()
 };
 bool ErrorCode_IsValid(int value);
 constexpr ErrorCode ErrorCode_MIN = RPC_ERR_OK;
-constexpr ErrorCode ErrorCode_MAX = RPC_ERR_INVALID_RESPONSE;
+constexpr ErrorCode ErrorCode_MAX = RPC_ERR_NO_NETWORK;
 constexpr int ErrorCode_ARRAYSIZE = ErrorCode_MAX + 1;
 
 const ::PROTOBUF_NAMESPACE_ID::EnumDescriptor* ErrorCode_descriptor();

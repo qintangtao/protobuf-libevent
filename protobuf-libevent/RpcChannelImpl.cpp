@@ -4,10 +4,10 @@
 #include "rpc_message.pb.h"
 
 
-static struct timeval tv_read = { 30, 0 };
-static struct timeval tv_connect = { 5, 0 };
-static struct timeval tv_heartbeat = { 10, 0 };
-
+static struct timeval tv_read		= { 30, 0 };
+static struct timeval tv_connect	= { 5, 0 };
+static struct timeval tv_heartbeat	= { 10, 0 };
+static struct timeval tv_request	= { 6, 0 };
 
 #define CHANNEL_BEV_LOCK(b)        \
 	do {                             \
@@ -43,8 +43,10 @@ static const struct error_entry {
 	{RPC_ERR_NO_METHOD, "RPC_ERR_NO_METHOD"},
 	{RPC_ERR_INVALID_REQUEST, "RPC_ERR_INVALID_REQUEST"},
 	{RPC_ERR_INVALID_RESPONSE, "RPC_ERR_INVALID_RESPONSE"},
+	{RPC_ERR_REQUEST_TIMEOUT, "RPC_ERR_REQUEST_TIMEOUT"},
+	{RPC_ERR_NO_NETWORK, "RPC_ERR_NO_NETWORK"},
 	{ErrorCode_INT_MAX_SENTINEL_DO_NOT_USE_, "RPC_ERR_UNKNOWN"},
-};
+}; 
 
 static const char *
 guess_error_str(enum ErrorCode code)
@@ -110,7 +112,9 @@ RpcChannelImpl::RpcChannelImpl(const char *ip_as_string)
 		exit(EXIT_FAILURE);
 	}
 
+#ifndef NDEBUG 
 	evtimer_add(m_heartbeat_timer, &tv_heartbeat);
+#endif
 
 	m_threadid = sys_os_create_thread(&RpcChannelImpl::worker, this);
 }
@@ -139,6 +143,11 @@ RpcChannelImpl::~RpcChannelImpl()
 	EVTHREAD_FREE_LOCK(m_cache_lock, EVTHREAD_LOCKTYPE_READWRITE);
 }
 
+struct request_timeout {
+	uint64_t id;
+	void *arg;
+};
+
 void RpcChannelImpl::CallMethod(const google::protobuf::MethodDescriptor* method,
 	google::protobuf::RpcController* controller, const google::protobuf::Message* request,
 	google::protobuf::Message* response, google::protobuf::Closure* done)
@@ -158,17 +167,23 @@ void RpcChannelImpl::CallMethod(const google::protobuf::MethodDescriptor* method
 		std::string message_str;
 		message.SerializeToString(&message_str);
 
-		// add to map
-		struct request_cache cache = { controller, response, done };
-		CHANNEL_CACHE_LOCK(this);
-		m_cache.insert(std::make_pair(message.id(), cache));
-		CHANNEL_CACHE_UNLOCK(this);
+		struct request_timeout *request_arg = (struct request_timeout *)malloc(sizeof(struct request_timeout));
+		request_arg->id = m_id;
+		request_arg->arg = this;
+		struct event *request_timer = evtimer_new(m_base, &RpcChannelImpl::request_time_cb, request_arg);
+
+		// add to cache
+		struct request_cache cache = { controller, response, done, request_timer };
+		add_request_cache(m_id, cache);
 
 		m_packet.length = (unsigned int)message_str.size();
 
 		struct evbuffer *output = bufferevent_get_output(m_bev);
 		evbuffer_add(output, &m_packet, sizeof(RPC_PACKET));
 		evbuffer_add(output, message_str.c_str(), message_str.size());
+
+		if (request_timer)
+			evtimer_add(request_timer, &tv_request);
 	}
 	else
 	{
@@ -208,7 +223,7 @@ void RpcChannelImpl::connect_time_cb(evutil_socket_t fd, short event, void *arg)
 		evtimer_add(pChannel->m_connect_timer, &tv_connect);
 }
 
-void RpcChannelImpl::heartbeat_time_cb(evutil_socket_t fd, short which, void *arg)
+void RpcChannelImpl::heartbeat_time_cb(evutil_socket_t fd, short event, void *arg)
 {
 	RpcChannelImpl *pChannel = (RpcChannelImpl *)arg;
 	struct evbuffer *output;
@@ -221,6 +236,31 @@ void RpcChannelImpl::heartbeat_time_cb(evutil_socket_t fd, short which, void *ar
 	CHANNEL_BEV_UNLOCK(pChannel);
 
 	evtimer_add(pChannel->m_heartbeat_timer, &tv_heartbeat);
+}
+
+void RpcChannelImpl::request_time_cb(evutil_socket_t fd, short event, void *arg)
+{
+	struct request_timeout *request_arg = (struct request_timeout *)arg;
+	RpcChannelImpl *pChannel = (RpcChannelImpl *)request_arg->arg;
+	struct request_cache cache;
+
+	do
+	{
+		if (!pChannel->del_request_cache(request_arg->id, cache))
+			break;
+
+		if (cache.request_timer)
+			evtimer_del(cache.request_timer);
+
+		if (cache.controller && !cache.controller->IsCanceled())
+			cache.controller->SetFailed(guess_error_str(RPC_ERR_REQUEST_TIMEOUT));
+
+		if (cache.done)
+			cache.done->Run();
+
+	} while (0);
+
+	free(request_arg);
 }
 
 void RpcChannelImpl::read_cb(struct bufferevent *bev, void *arg)
@@ -316,8 +356,7 @@ void RpcChannelImpl::event_cb(struct bufferevent *bev, short events, void *arg)
 		evtimer_add(pChannel->m_connect_timer, &tv_connect);
 }
 
-struct bufferevent *
-	RpcChannelImpl::create_bufferevent_socket()
+struct bufferevent *RpcChannelImpl::create_bufferevent_socket()
 {
 	struct bufferevent *bev = NULL;
 
@@ -353,76 +392,78 @@ err:
 void RpcChannelImpl::decode(const std::string &message_str)
 {
 	std::map<uint64_t, struct request_cache>::iterator iter;
-	google::protobuf::RpcController* controller = NULL;
-	google::protobuf::Message *response = NULL;
-	google::protobuf::Closure* done = NULL;
 	struct request_cache cache;
 	RpcMessage message;
 
-	if (!message.ParseFromString(message_str)) {
-		std::cout << "Parse message failed!" << std::endl;
-		return;
-	}
-
-#ifndef NDEBUG
-	std::cout << "client -> "
-		<< "size: " << message_str.size()
-		<< ", type: " << message.type()
-		<< ", id: " << message.id()
-		<< ", service: " << message.service()
-		<< ", method: " << message.method()
-		<< ", error: " << message.error()
-		<< ", response: " << message.response().size()
-		<< std::endl;
-#endif
-
 	do 
 	{
-		CHANNEL_CACHE_LOCK(this);
-		iter = m_cache.find(message.id());
-		if (iter == m_cache.end()) {
-			std::cout << "Do not Find, id: " << message.id() << std::endl;
-			CHANNEL_CACHE_UNLOCK(this);
+		if (!message.ParseFromString(message_str)) {
+			std::cout << "Parse message failed!" << std::endl;
 			break;
 		}
 
-		cache = iter->second;
-		controller = cache.controller;
-		response = cache.response;
-		done = cache.done;
+#ifndef NDEBUG
+		std::cout << "client -> "
+			<< "size: " << message_str.size()
+			<< ", type: " << message.type()
+			<< ", id: " << message.id()
+			<< ", service: " << message.service()
+			<< ", method: " << message.method()
+			<< ", error: " << message.error()
+			<< ", response: " << message.response().size()
+			<< std::endl;
+#endif
 
-		// del from map
-		m_cache.erase(iter);
-		CHANNEL_CACHE_UNLOCK(this);
-
-		if (controller && controller->IsCanceled())
+		if (!del_request_cache(message.id(), cache))
 			break;
 
-		if (!response)
-			break;
+		if (cache.request_timer)
+			evtimer_del(cache.request_timer);
 
-		if (!done)
-			break;
-
-		switch (message.error())
-		{
-		case RPC_ERR_OK:
-		{
-			if (!response->ParseFromString(message.response())) {
-				if (controller)
-					controller->SetFailed("RPC_ERR_PARSE");
+		// 没有取消则解析response
+		if (cache.controller && !cache.controller->IsCanceled()) {
+			if (message.error() == RPC_ERR_OK) {
+				if (cache.response && !cache.response->ParseFromString(message.response())) {
+					if (cache.controller)
+						cache.controller->SetFailed(guess_error_str(RPC_ERR_INVALID_RESPONSE));
+				}
+			} else {
+				if (cache.controller)
+					cache.controller->SetFailed(guess_error_str(message.error()));
 			}
 		}
-			break;
-		default:
-		{
-			if (controller)
-				controller->SetFailed(guess_error_str(message.error()));
-		}
-			break;
-		}
 		
-		done->Run();
+		if (cache.done)
+			cache.done->Run();
 
 	} while (0);
+}
+
+void RpcChannelImpl::add_request_cache(uint64_t id, const struct request_cache &cache)
+{
+	CHANNEL_CACHE_LOCK(this);
+	m_cache.insert(std::make_pair(id, cache));
+	CHANNEL_CACHE_UNLOCK(this);
+}
+
+bool RpcChannelImpl::del_request_cache(uint64_t id, struct request_cache &cache)
+{
+	std::map<uint64_t, struct request_cache>::iterator iter;
+
+	CHANNEL_CACHE_LOCK(this);
+	iter = m_cache.find(id);
+	if (iter == m_cache.end()) {
+		std::cout << "Do not Find, id: " << id << std::endl;
+		CHANNEL_CACHE_UNLOCK(this);
+		return false;
+	}
+
+	cache = iter->second;
+
+	// del from cache
+	m_cache.erase(iter);
+
+	CHANNEL_CACHE_UNLOCK(this);
+
+	return true;
 }

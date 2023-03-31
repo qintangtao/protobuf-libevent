@@ -73,15 +73,16 @@ const char descriptor_table_protodef_rpc_5fmessage_2eproto[] PROTOBUF_SECTION_VA
   "(\0162\n.ErrorCode\022\017\n\007request\030d \001(\014\022\020\n\010respo"
   "nse\030e \001(\014*d\n\013MessageType\022\024\n\020RPC_TYPE_UNK"
   "NOWN\020\000\022\024\n\020RPC_TYPE_REQUEST\020\001\022\025\n\021RPC_TYPE"
-  "_RESPONSE\020\002\022\022\n\016RPC_TYPE_ERROR\020\003*\205\001\n\tErro"
+  "_RESPONSE\020\002\022\022\n\016RPC_TYPE_ERROR\020\003*\272\001\n\tErro"
   "rCode\022\016\n\nRPC_ERR_OK\020\000\022\026\n\022RPC_ERR_NO_SERV"
   "ICE\020\001\022\025\n\021RPC_ERR_NO_METHOD\020\002\022\033\n\027RPC_ERR_"
   "INVALID_REQUEST\020\003\022\034\n\030RPC_ERR_INVALID_RES"
-  "PONSE\020\004b\006proto3"
+  "PONSE\020\004\022\033\n\027RPC_ERR_REQUEST_TIMEOUT\020\005\022\026\n\022"
+  "RPC_ERR_NO_NETWORK\020\006b\006proto3"
   ;
 static ::_pbi::once_flag descriptor_table_rpc_5fmessage_2eproto_once;
 const ::_pbi::DescriptorTable descriptor_table_rpc_5fmessage_2eproto = {
-    false, false, 415, descriptor_table_protodef_rpc_5fmessage_2eproto,
+    false, false, 468, descriptor_table_protodef_rpc_5fmessage_2eproto,
     "rpc_message.proto",
     &descriptor_table_rpc_5fmessage_2eproto_once, nullptr, 0, 1,
     schemas, file_default_instances, TableStruct_rpc_5fmessage_2eproto::offsets,
@@ -121,6 +122,8 @@ bool ErrorCode_IsValid(int value) {
     case 2:
     case 3:
     case 4:
+    case 5:
+    case 6:
       return true;
     default:
       return false;
