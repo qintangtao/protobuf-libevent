@@ -50,7 +50,7 @@ struct callback_cache {
 	google::protobuf::RpcController* controller;
 	google::protobuf::Message* response;
 	google::protobuf::Closure* done;
-	struct event *request_timer;
+	struct timeval tv;
 };
 
 class RpcChannelImpl :
@@ -76,6 +76,7 @@ private:
 
 	void send_no_lock(const std::string &message_str);
 
+
 	void decode(const std::string &message_str);
 
 	void add_request_cache(uint64_t id, const std::string &message_str);
@@ -83,6 +84,7 @@ private:
 	bool del_request_cache_first(std::string &message_str);
 	bool has_request_cache(uint64_t id);
 
+	void guess_callback_cache();
 	void add_callback_cache(uint64_t id, const struct callback_cache &cache);
 	bool del_callback_cache(uint64_t id, struct callback_cache &cache);
 
@@ -96,6 +98,7 @@ private:
 	void				*m_bev_lock;
 	struct event		*m_connect_timer;
 	struct event		*m_heartbeat_timer;
+	struct event		*m_request_timer;
 	struct sockaddr_storage m_connect_to_addr;
 	int					m_connect_to_addrlen;
 

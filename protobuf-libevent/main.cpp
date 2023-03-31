@@ -96,11 +96,11 @@ int main()
 	RpcServer *server = new RpcServer(9206);
 	RpcChannelImpl *channel = new RpcChannelImpl("127.0.0.1:9206");
 	
-
 	USleep(3 * 1000 * 1000);
 
-
 	EchoService_Stub service(channel);
+
+#if 1
 	{
 		EchoRequest *request = new EchoRequest();
 		EchoResponse *response = new EchoResponse();
@@ -113,6 +113,7 @@ int main()
 	}
 
 	USleep(3 * 1000 * 1000);
+#endif
 
 #if 1
 	for (int i = 0; i < 20; i++)
@@ -122,13 +123,12 @@ int main()
 		google::protobuf::RpcController* controller = new RpcControllerImpl();
 		google::protobuf::Closure* done = google::protobuf::NewCallback(&DoneCallback, controller, (google::protobuf::Message *)request, (google::protobuf::Message *)response);
 
-		request->set_a(22 + i*i);
+		request->set_a(22 + i * i);
 		request->set_b(44 + i * i * 2);
 
 		service.Add(controller, request, response, done);
 	}
 #endif
-
 
 	getchar();
 

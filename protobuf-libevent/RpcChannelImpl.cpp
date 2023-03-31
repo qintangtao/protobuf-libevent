@@ -126,8 +126,14 @@ RpcChannelImpl::RpcChannelImpl(const char *ip_as_string)
 		fprintf(stderr, "Can't create heartbeat timer\n");
 		exit(EXIT_FAILURE);
 	}
-
 	evtimer_add(m_heartbeat_timer, &tv_heartbeat);
+
+	m_request_timer = evtimer_new(m_base, &RpcChannelImpl::request_time_cb, this);
+	if (!m_request_timer) {
+		fprintf(stderr, "Can't create request timer\n");
+		exit(EXIT_FAILURE);
+	}
+	evtimer_add(m_request_timer, &tv_request);
 
 	m_threadid = sys_os_create_thread(&RpcChannelImpl::worker, this);
 }
@@ -146,6 +152,9 @@ RpcChannelImpl::~RpcChannelImpl()
 	if (m_heartbeat_timer)
 		event_free(m_heartbeat_timer);
 
+	if (m_request_timer)
+		event_free(m_request_timer);
+	
 	if (m_bev)
 		bufferevent_free(m_bev);
 
@@ -179,14 +188,9 @@ void RpcChannelImpl::CallMethod(const google::protobuf::MethodDescriptor* method
 	std::string message_str;
 	message.SerializeToString(&message_str);
 
-	struct request_timeout *request_arg = (struct request_timeout *)malloc(sizeof(struct request_timeout));
-	request_arg->id = m_id;
-	request_arg->arg = this;
-
-	struct event *request_timer = evtimer_new(m_base, &RpcChannelImpl::request_time_cb, request_arg);
-
 	// add to cache
-	struct callback_cache cache = { controller, response, done, request_timer };
+	struct callback_cache cache = { controller, response, done };
+	evutil_gettimeofday(&cache.tv, NULL);
 	add_callback_cache(m_id, cache);
 
 	CHANNEL_BEV_LOCK(this);
@@ -202,9 +206,6 @@ void RpcChannelImpl::CallMethod(const google::protobuf::MethodDescriptor* method
 		// 等待重连网络后发送，如果超时则移除
 		add_request_cache(m_id, message_str);
 	}
-
-	if (request_timer)
-		evtimer_add(request_timer, &tv_request);
 }
 
 void *RpcChannelImpl::worker(void *arg)
@@ -248,36 +249,11 @@ void RpcChannelImpl::heartbeat_time_cb(evutil_socket_t fd, short event, void *ar
 
 void RpcChannelImpl::request_time_cb(evutil_socket_t fd, short event, void *arg)
 {
-	struct request_timeout *request_arg = (struct request_timeout *)arg;
-	RpcChannelImpl *pChannel = (RpcChannelImpl *)request_arg->arg;
-	struct callback_cache cache;
-	std::string message_str;
-	bool has_request;
+	RpcChannelImpl *pChannel = (RpcChannelImpl *)arg;
 
-	do
-	{
-		// 超时则从缓存中删除
-		has_request = pChannel->del_request_cache(request_arg->id, message_str);
+	pChannel->guess_callback_cache();
 
-		if (!pChannel->del_callback_cache(request_arg->id, cache))
-			break;
-
-		if (cache.request_timer)
-			evtimer_del(cache.request_timer);
-
-		if (cache.controller && !cache.controller->IsCanceled()) {
-			if (has_request)
-				cache.controller->SetFailed(guess_error_str(RPC_ERR_NO_NETWORK));
-			else
-				cache.controller->SetFailed(guess_error_str(RPC_ERR_REQUEST_TIMEOUT));
-		}
-
-		if (cache.done)
-			cache.done->Run();
-
-	} while (0);
-
-	free(request_arg);
+	evtimer_add(pChannel->m_request_timer, &tv_request);
 }
 
 void RpcChannelImpl::read_cb(struct bufferevent *bev, void *arg)
@@ -457,9 +433,6 @@ void RpcChannelImpl::decode(const std::string &message_str)
 		if (!del_callback_cache(message.id(), cache))
 			break;
 
-		if (cache.request_timer)
-			evtimer_del(cache.request_timer);
-
 		// 没有取消则解析response
 		if (cache.controller && !cache.controller->IsCanceled()) {
 			if (message.error() == RPC_ERR_OK) {
@@ -544,6 +517,49 @@ bool RpcChannelImpl::has_request_cache(uint64_t id)
 	CHANNEL_REQUEST_CACHE_UNLOCK(this);
 
 	return true;
+}
+
+void RpcChannelImpl::guess_callback_cache()
+{
+	std::map<uint64_t, struct callback_cache>::iterator	iter;
+	std::string message_str;
+	struct timeval te, ts;
+
+	evutil_gettimeofday(&te, NULL);
+
+	CHANNEL_CALLBACK_CACHE_LOCK(this);
+	while ((iter = m_callback_cache.begin()) != m_callback_cache.end())
+	{
+		uint64_t id = iter->first;
+		struct callback_cache &cache = iter->second;
+
+		if (cache.controller && cache.controller->IsCanceled()) {
+			// Canceled
+
+			// del from request cache
+			del_request_cache(id, message_str);
+
+		} else {
+			// check request timeout
+			evutil_timersub(&te, &cache.tv, &ts);
+
+			if ((ts.tv_sec * 1000000L + ts.tv_usec) < 6000000L)
+				break;
+
+			// del from request cache
+			if (del_request_cache(id, message_str))
+				cache.controller->SetFailed(guess_error_str(RPC_ERR_NO_NETWORK));
+			else
+				cache.controller->SetFailed(guess_error_str(RPC_ERR_REQUEST_TIMEOUT));
+		}
+
+		if (cache.done)
+			cache.done->Run();
+
+		// del from callback cache
+		m_callback_cache.erase(iter);
+	}
+	CHANNEL_CALLBACK_CACHE_UNLOCK(this);
 }
 
 void RpcChannelImpl::add_callback_cache(uint64_t id, const struct callback_cache &cache)
