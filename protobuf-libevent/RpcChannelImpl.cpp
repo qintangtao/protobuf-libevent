@@ -235,14 +235,8 @@ void RpcChannelImpl::connect_time_cb(evutil_socket_t fd, short event, void *arg)
 void RpcChannelImpl::heartbeat_time_cb(evutil_socket_t fd, short event, void *arg)
 {
 	RpcChannelImpl *pChannel = (RpcChannelImpl *)arg;
-	struct evbuffer *output;
 
-	CHANNEL_BEV_LOCK(pChannel);
-	if (pChannel->m_bev) {
-		output = bufferevent_get_output(pChannel->m_bev);
-		evbuffer_add(output, &pChannel->m_packet_heartbeat, sizeof(RPC_PACKET));
-	}
-	CHANNEL_BEV_UNLOCK(pChannel);
+	pChannel->send_heartbeat();
 
 	evtimer_add(pChannel->m_heartbeat_timer, &tv_heartbeat);
 }
@@ -403,6 +397,18 @@ void RpcChannelImpl::send_no_lock(const std::string &message_str)
 	
 	evbuffer_add(output, &m_packet, sizeof(RPC_PACKET));
 	evbuffer_add(output, message_str.c_str(), message_str.size());
+}
+
+void RpcChannelImpl::send_heartbeat()
+{
+	struct evbuffer *output;
+
+	CHANNEL_BEV_LOCK(this);
+	if (m_bev) {
+		output = bufferevent_get_output(m_bev);
+		evbuffer_add(output, &m_packet_heartbeat, sizeof(RPC_PACKET));
+	}
+	CHANNEL_BEV_UNLOCK(this);
 }
 
 void RpcChannelImpl::decode(const std::string &message_str)

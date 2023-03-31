@@ -75,7 +75,8 @@ private:
 	struct bufferevent *create_bufferevent_socket();
 
 	void send_no_lock(const std::string &message_str);
-
+	
+	void send_heartbeat();
 
 	void decode(const std::string &message_str);
 
