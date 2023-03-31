@@ -11,11 +11,15 @@ EchoServiceImpl::~EchoServiceImpl()
 {
 }
 
+static int sec = 5;
+
 void *echo_worker(void *arg)
 {
 	::google::protobuf::Closure* done = (::google::protobuf::Closure*)arg;
 
-	USleep(18 * 1000 * 1000);
+	sec += 3;
+	
+	USleep(sec * 1000 * 1000);
 
 	done->Run();
 

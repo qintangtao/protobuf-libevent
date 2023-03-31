@@ -95,11 +95,11 @@ static void bufferevent_client_free(struct bufferevent_client *client)
 	BEV_CLIENT_LOCK(client);
 
 	if (--client->refcnt > 0) {
-		BEV_CLIENT_LOCK(client);
+		BEV_CLIENT_UNLOCK(client);
 		return;
 	}
 
-	BEV_CLIENT_LOCK(client);
+	BEV_CLIENT_UNLOCK(client);
 	if (client->lock)
 		EVTHREAD_FREE_LOCK(client->lock, EVTHREAD_LOCKTYPE_READWRITE);
 
@@ -110,14 +110,14 @@ static void bufferevent_client_add_reference(struct bufferevent_client *client)
 {
 	BEV_CLIENT_LOCK(client);
 	client->refcnt++;
-	BEV_CLIENT_LOCK(client);
+	BEV_CLIENT_UNLOCK(client);
 }
 
 static void bufferevent_client_set_bev(struct bufferevent_client *client, struct bufferevent *bev)
 {
 	BEV_CLIENT_LOCK(client);
 	client->bev = bev;
-	BEV_CLIENT_LOCK(client);
+	BEV_CLIENT_UNLOCK(client);
 }
 
 static void send_rpc_message(struct bufferevent *bev, const std::string &message_str)
@@ -327,7 +327,7 @@ void RpcServer::done_cb(RpcMessage &message, struct bufferevent_client *client,
 		BEV_CLIENT_LOCK(client);
 		if (client->bev) 
 			send_rpc_message(client->bev, message_str);
-		BEV_CLIENT_LOCK(client);
+		BEV_CLIENT_UNLOCK(client);
 
 	} while (0);
 
@@ -393,6 +393,7 @@ void RpcServer::decode(struct bufferevent_client *client, const std::string &mes
 #endif
 
 		bufferevent_client_add_reference(client);
+
 		done = new RpcServerClosure(&RpcServer::done_cb, client);
 		done->message.set_type(RPC_TYPE_RESPONSE);
 		done->message.set_id(message.id());

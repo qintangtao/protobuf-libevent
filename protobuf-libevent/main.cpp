@@ -101,6 +101,7 @@ int main()
 	EchoService_Stub service(channel);
 
 #if 1
+	for (int i = 0; i < 10; i++)
 	{
 		EchoRequest *request = new EchoRequest();
 		EchoResponse *response = new EchoResponse();
@@ -110,12 +111,14 @@ int main()
 		request->set_message("hello!");
 
 		service.Echo(controller, request, response, done);
+
+		USleep(40 * 1000);
 	}
 
 	USleep(3 * 1000 * 1000);
 #endif
 
-#if 1
+#if 0
 	for (int i = 0; i < 20; i++)
 	{
 		AddRequest *request = new AddRequest();
