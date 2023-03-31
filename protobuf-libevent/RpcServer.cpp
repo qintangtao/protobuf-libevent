@@ -261,6 +261,7 @@ void RpcServer::read_cb(struct bufferevent *bev, void *arg)
 		if (packet.length == 0) {
 			//fprintf(stderr, "major_version:%d, minor_version:%d, length:%d\n",
 			//	packet.major_version, packet.minor_version, packet.length);
+			//如果是多线程，此处可能会造成数据混乱
 			evbuffer_add(output, &packet, sizeof(RPC_PACKET));
 			continue;
 		}
@@ -400,6 +401,17 @@ void RpcServer::decode(struct bufferevent_client *client, const std::string &mes
 		done->message.set_service(message.service());
 		done->message.set_method(message.method());
 		done->message.set_error(RPC_ERR_OK);
+
+		// 可以对任务计数统计，当任务量达到一定数量是不进行处理
+		// 此处增加任务计数 request_cnt++;   需加锁
+		// 再done->Run()回调中减少任务计数 request_cnt--;
+#if 0
+		static uint64_t request_cnt = 1;
+		if (request_cnt > 1000) {
+			done->message.set_error(任务繁忙，请稍后重试！);
+			break;
+		}
+#endif
 
 		iter = m_spServiceMap.find(message.service());
 		if (iter == m_spServiceMap.end()) {
