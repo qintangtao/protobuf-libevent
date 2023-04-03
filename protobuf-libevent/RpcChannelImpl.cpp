@@ -322,15 +322,18 @@ void RpcChannelImpl::event_cb(struct bufferevent *bev, short events, void *arg)
 		fprintf(stdout, "Got an error on the connection\n"); /*XXX win32*/
 	} else if (events & BEV_EVENT_TIMEOUT) {
 		fprintf(stdout, "Connection timeout.\n");
-	} else if (events & BEV_EVENT_CONNECTED) {
-		CHANNEL_BEV_LOCK(pChannel);
-		pChannel->m_bev = bev;
-		CHANNEL_BEV_UNLOCK(pChannel);
-
-		pChannel->send_request_cache();
-
-		return;
 	} else {
+
+		if (events & BEV_EVENT_CONNECTED) {
+
+			CHANNEL_BEV_LOCK(pChannel);
+			pChannel->m_bev = bev;
+			CHANNEL_BEV_UNLOCK(pChannel);
+
+			pChannel->send_request_cache();
+
+		}
+
 		return;
 	}
 

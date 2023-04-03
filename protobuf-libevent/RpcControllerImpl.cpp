@@ -46,5 +46,7 @@ bool RpcControllerImpl::IsCanceled() const
 
 void RpcControllerImpl::NotifyOnCancel(::google::protobuf::Closure* callback)
 {
-
+	m_bIsCanceled = true;
+	if (callback)
+		callback->Run();
 }

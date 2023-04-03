@@ -34,38 +34,6 @@ static struct timeval tv_read = { 30, 0 };
 	} while (0)
 
 
-class RpcServerClosure : public google::protobuf::Closure {
-public:
-	typedef void(*FunctionType)(
-		RpcMessage &message,
-		struct bufferevent_client *client,
-		google::protobuf::RpcController* controller, 
-		google::protobuf::Message *request, 
-		google::protobuf::Message *response);
-	
-	RpcServerClosure(FunctionType function, struct bufferevent_client *client, bool self_deleting=true)
-		: function_(function), client_(client), self_deleting_(self_deleting)
-		, controller(NULL), request(NULL), response(NULL) {}
-	~RpcServerClosure() {}
-
-	void Run() override {
-		bool needs_delete = self_deleting_;  // read in case callback deletes
-		function_(message, client_, controller, request, response);
-		if (needs_delete) delete this;
-	}
-
-	RpcMessage message;
-	google::protobuf::RpcController* controller;
-	google::protobuf::Message *request;
-	google::protobuf::Message *response;
-
-private:
-	FunctionType function_;
-	bool self_deleting_;
-	struct bufferevent_client *client_;
-};
-
-
 struct bufferevent_client {
 	struct bufferevent *bev;
 	int refcnt;
@@ -134,6 +102,44 @@ static void send_rpc_message(struct bufferevent *bev, const std::string &message
 	evbuffer_add(output, &packet, sizeof(RPC_PACKET));
 	evbuffer_add(output, message_str.c_str(), message_str.size());
 }
+
+
+class RpcServerClosure : public google::protobuf::Closure {
+public:
+	typedef void(*FunctionType)(
+		RpcMessage &message,
+		struct bufferevent_client *client,
+		google::protobuf::RpcController* controller,
+		google::protobuf::Message *request,
+		google::protobuf::Message *response);
+
+	RpcServerClosure(FunctionType function, struct bufferevent_client *client, bool self_deleting = true)
+		: function_(function), client_(client), self_deleting_(self_deleting)
+		, controller(NULL), request(NULL), response(NULL) {
+		if (client_)
+			bufferevent_client_add_reference(client_);
+	}
+	~RpcServerClosure() {
+		if (client_)
+			bufferevent_client_free(client_);
+	}
+
+	void Run() override {
+		bool needs_delete = self_deleting_;  // read in case callback deletes
+		function_(message, client_, controller, request, response);
+		if (needs_delete) delete this;
+	}
+
+	RpcMessage message;
+	google::protobuf::RpcController* controller;
+	google::protobuf::Message *request;
+	google::protobuf::Message *response;
+
+private:
+	FunctionType function_;
+	bool self_deleting_;
+	struct bufferevent_client *client_;
+};
 
 RpcServer::RpcServer(unsigned short port)
 	: m_base(NULL)
@@ -262,7 +268,9 @@ void RpcServer::read_cb(struct bufferevent *bev, void *arg)
 			//fprintf(stderr, "major_version:%d, minor_version:%d, length:%d\n",
 			//	packet.major_version, packet.minor_version, packet.length);
 			//如果是多线程，此处可能会造成数据混乱
+			BEV_CLIENT_LOCK(client);
 			evbuffer_add(output, &packet, sizeof(RPC_PACKET));
+			BEV_CLIENT_UNLOCK(client);
 			continue;
 		}
 
@@ -276,8 +284,10 @@ void RpcServer::read_cb(struct bufferevent *bev, void *arg)
 			break;
 		}
 
-		if (pServer)
+		if (pServer) {
+			// 此处可优化，防止内存拷贝
 			pServer->decode(client, std::string((const char *)body, packet.length));
+		}
 
 		// remove packet body data
 		evbuffer_drain(input, packet.length);
@@ -290,13 +300,19 @@ void RpcServer::event_cb(struct bufferevent *bev, short events, void *arg)
 	RpcServer *pServer = (RpcServer *)client->arg;
 
 	if (events & BEV_EVENT_EOF) {
-		printf("Connection closed.\n");
+#ifndef NDEBUG
+		fprintf(stderr, "Connection closed.\n");
+#endif
 	}
 	else if (events & BEV_EVENT_ERROR) {
-		printf("Got an error on the connection\n"); /*XXX win32*/
+#ifndef NDEBUG
+		fprintf(stderr, "Got an error on the connection\n"); /*XXX win32*/
+#endif
 	}
 	else if (events & BEV_EVENT_TIMEOUT) {
-		printf("Connection timeout.\n");
+#ifndef NDEBUG
+		fprintf(stderr, "Connection timeout.\n");
+#endif
 	}
 	else {
 		return;
@@ -322,7 +338,18 @@ void RpcServer::done_cb(RpcMessage &message, struct bufferevent_client *client,
 			message.set_response(response->SerializeAsString());
 
 		std::string message_str;
-		message.SerializeToString(&message_str);
+		if (!message.SerializeToString(&message_str)) {
+#ifndef NDEBUG
+			std::cout << "server.done_cb -> "
+				<< ", type: " << message.type()
+				<< ", id: " << message.id()
+				<< ", service: " << message.service()
+				<< ", method: " << message.method()
+				<< ", error: " << message.error()
+				<< std::endl;
+#endif
+			break;
+		}
 
 		// send to client
 		BEV_CLIENT_LOCK(client);
@@ -332,8 +359,6 @@ void RpcServer::done_cb(RpcMessage &message, struct bufferevent_client *client,
 
 	} while (0);
 
-	if (client)
-		bufferevent_client_free(client);
 	if (controller)
 		delete controller;
 	if (request)
@@ -393,8 +418,6 @@ void RpcServer::decode(struct bufferevent_client *client, const std::string &mes
 			<< std::endl;
 #endif
 
-		bufferevent_client_add_reference(client);
-
 		done = new RpcServerClosure(&RpcServer::done_cb, client);
 		done->message.set_type(RPC_TYPE_RESPONSE);
 		done->message.set_id(message.id());
@@ -408,7 +431,7 @@ void RpcServer::decode(struct bufferevent_client *client, const std::string &mes
 #if 0
 		static uint64_t request_cnt = 1;
 		if (request_cnt > 1000) {
-			done->message.set_error(任务繁忙，请稍后重试！);
+			done->message.set_error(RPC_ERR_BUSY);
 			break;
 		}
 #endif
