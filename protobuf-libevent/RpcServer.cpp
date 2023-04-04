@@ -372,7 +372,7 @@ struct bufferevent *RpcServer::create_bufferevent_socket(struct event_base *base
 	struct bufferevent *bev;
 
 	bev = bufferevent_socket_new(base, fd,
-		BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS | BEV_OPT_THREADSAFE);
+		BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS | BEV_OPT_UNLOCK_CALLBACKS | BEV_OPT_THREADSAFE);
 	if (!bev) {
 		fprintf(stderr, "Couldn't new bufferevent socket.\n");
 		goto err;
@@ -429,9 +429,8 @@ void RpcServer::decode(struct bufferevent_client *client, const std::string &mes
 		// 此处增加任务计数 request_cnt++;   需加锁
 		// 再done->Run()回调中减少任务计数 request_cnt--;
 #if 0
-		static uint64_t request_cnt = 1;
 		if (request_cnt > 1000) {
-			done->message.set_error(RPC_ERR_BUSY);
+			done->message.set_error(RPC_ERR_SERVER_BUSY);
 			break;
 		}
 #endif
