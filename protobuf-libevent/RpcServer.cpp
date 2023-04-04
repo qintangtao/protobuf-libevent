@@ -279,8 +279,8 @@ void RpcServer::read_cb(struct bufferevent *bev, void *arg)
 		if (!body) {
 			fprintf(stderr, "major_version:%d, minor_version:%d, length:%d evbuffer pullup\n",
 				packet.major_version, packet.minor_version, packet.length);
-			// clear buffer
-			evbuffer_drain(input, evbuffer_get_length(input));
+			//  remove packet body data
+			evbuffer_drain(input, packet.length);
 			break;
 		}
 
